@@ -1,0 +1,36 @@
+# Which PII entity types to detect and how to handle each.
+# action: mask (reversible tokenization) | hash (one-way) | drop (remove entirely)
+
+entities:
+  EMAIL_ADDRESS:
+    action: mask
+    token_prefix: PII_EMAIL
+  PHONE_NUMBER:
+    action: mask
+    token_prefix: PII_PHONE
+  CREDIT_CARD:
+    action: mask
+    token_prefix: PII_CC
+  US_SSN:
+    action: hash
+    token_prefix: PII_SSN
+  IN_AADHAAR:
+    action: hash
+    token_prefix: PII_AADHAAR
+  IN_PAN:
+    action: hash
+    token_prefix: PII_PAN
+  IP_ADDRESS:
+    action: mask
+    token_prefix: PII_IP
+  PERSON:
+    action: mask
+    token_prefix: PII_NAME
+
+# Never rehydrate PII into logs/traces — only into the final response shown
+# to the original requesting user, and only if this is true.
+rehydrate_in_response: true
+
+# Scope of the token<->value map: per trace_id, held in-memory (or Redis in
+# production) and discarded once the request completes.
+token_store_scope: trace_id

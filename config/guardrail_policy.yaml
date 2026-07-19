@@ -1,0 +1,41 @@
+# Guardrail policy consumed by middleware/guardrails.py
+
+input:
+  max_query_length: 1000
+  prompt_injection_phrases:
+    - "ignore previous instructions"
+    - "ignore all previous instructions"
+    - "disregard prior instructions"
+    - "you are now"
+    - "system prompt"
+    - "drop table"
+    - "reveal your instructions"
+
+sql:
+  allowed_statement_types: ["SELECT"]
+  denylist_keywords:
+    - "DROP"
+    - "DELETE"
+    - "ALTER"
+    - "ATTACH"
+    - "DETACH"
+    - "PRAGMA"
+    - "INSERT"
+    - "UPDATE"
+    - "CREATE"
+    - "TRUNCATE"
+    - "GRANT"
+    - "REPLACE"
+  deny_comment_tokens: ["--", "/*", "*/"]
+  deny_multiple_statements: true
+  default_row_limit: 500
+  max_row_limit: 500
+  query_timeout_seconds: 5
+
+output:
+  scan_for_pii: true
+  block_stack_traces: true
+  block_db_file_paths: true
+
+escalation:
+  max_regeneration_attempts: 1

@@ -58,8 +58,16 @@ def _check_access(sql_text: str, username: str, is_superuser: bool, db_path: Pat
             raise AccessDeniedError(f"you don't have access to table '{table}'")
 
 
-def execute_script(sql_text: str, username: str, is_superuser: bool = False, db_path: Path | None = None) -> None:
+def execute_script(
+    sql_text: str,
+    username: str,
+    is_superuser: bool = False,
+    db_path: Path | None = None,
+    role: str = "editor",
+) -> None:
     """Runs a multi-statement script (e.g. an uploaded schema.sql)."""
+    if not auth.can_write(role):
+        raise AccessDeniedError("your role (viewer) is read-only -- ask an editor/admin to run this")
     db_path = db_path or DB_PATH
     for statement in sqlglot.parse(sql_text, read="sqlite"):
         if statement is not None:
@@ -76,11 +84,17 @@ def execute_script(sql_text: str, username: str, is_superuser: bool = False, db_
 
 
 def execute_write(
-    sql_text: str, username: str, is_superuser: bool = False, db_path: Path | None = None
+    sql_text: str,
+    username: str,
+    is_superuser: bool = False,
+    db_path: Path | None = None,
+    role: str = "editor",
 ) -> tuple[list[str], list[dict]]:
     """Runs one statement of any kind (SELECT or DDL/DML) on a read-write
     connection. Returns (columns, rows) -- empty for statements with no
     result set."""
+    if not auth.can_write(role):
+        raise AccessDeniedError("your role (viewer) is read-only -- use the guarded SQL Editor mode instead")
     db_path = db_path or DB_PATH
     _check_access(sql_text, username, is_superuser, db_path)
 
@@ -106,8 +120,11 @@ def import_csv(
     is_superuser: bool = False,
     if_exists: str = "append",
     db_path: Path | None = None,
+    role: str = "editor",
 ) -> int:
     """Loads a CSV file object into `table_name`. if_exists: append|replace|fail."""
+    if not auth.can_write(role):
+        raise AccessDeniedError("your role (viewer) is read-only -- ask an editor/admin to import data")
     db_path = db_path or DB_PATH
     if not auth.can_access_table(table_name, username, is_superuser, db_path=db_path):
         raise AccessDeniedError(f"you don't have access to table '{table_name}'")

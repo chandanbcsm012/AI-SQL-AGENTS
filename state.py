@@ -31,3 +31,5 @@ class AgentState(TypedDict, total=False):
     human_review: HumanReview
     error_detail: dict[str, Any] | None
     _force_provider: str | None
+    _generation_mode: str | None  # "initial" | "regenerate", set by agents/sql_generator.py
+    critic_feedback: str | None  # set by agents/critic.py when AGENTIC_CRITIC_ENABLED and the answer looks insufficient

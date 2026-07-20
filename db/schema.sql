@@ -34,11 +34,17 @@ CREATE TABLE IF NOT EXISTS order_item (
 );
 
 -- Authentication + per-user table authorization (auth.py).
+-- role: viewer (guarded SELECT-only, no SQL Editor unguarded mode, no
+-- imports) | editor (today's regular user: owns tables they create) |
+-- admin (today's superuser: sees/can do everything). is_superuser is kept
+-- as a derived column (role = 'admin') so existing code that only knows
+-- about the old boolean keeps working unchanged.
 CREATE TABLE IF NOT EXISTS app_user (
     user_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     username        TEXT NOT NULL UNIQUE,
     password_hash   TEXT NOT NULL,
     salt            TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('viewer', 'editor', 'admin')),
     is_superuser    INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL
 );
@@ -53,14 +59,15 @@ CREATE TABLE IF NOT EXISTS table_ownership (
 );
 
 -- Human-in-the-loop review queue, used by human_review/ module.
+-- sql_attempts holds the full JSON list of {attempt, sql, valid, error}
+-- dicts -- not fixed columns -- since the number of attempts before
+-- escalation depends on config/guardrail_policy.yaml's
+-- escalation.max_regeneration_attempts, not a hardcoded count of 2.
 CREATE TABLE IF NOT EXISTS review_queue (
     review_id       INTEGER PRIMARY KEY AUTOINCREMENT,
     trace_id        TEXT NOT NULL,
     user_query_masked TEXT NOT NULL,
-    sql_attempt_1   TEXT,
-    sql_error_1     TEXT,
-    sql_attempt_2   TEXT,
-    sql_error_2     TEXT,
+    sql_attempts    TEXT NOT NULL,
     schema_context  TEXT,
     status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     reviewer        TEXT,

@@ -26,12 +26,17 @@ def cmd_show(args) -> None:
         print(f"No review with id {args.review_id}")
         return
     for key in row.keys():
-        print(f"{key}: {row[key]}")
+        if key == "sql_attempts":
+            print("sql_attempts:")
+            for attempt in queue.get_sql_attempts(row):
+                print(f"  #{attempt['attempt']}: valid={attempt['valid']} sql={attempt['sql']!r} error={attempt['error']!r}")
+        else:
+            print(f"{key}: {row[key]}")
 
 
 def cmd_approve(args) -> None:
     row = queue.get(args.review_id)
-    sql = args.sql or (row["sql_attempt_2"] or row["sql_attempt_1"])
+    sql = args.sql or queue.latest_failed_sql(row)
     queue.decide(args.review_id, approved=True, reviewer=args.reviewer, decision_sql=sql)
     print(f"Approved review {args.review_id} with SQL:\n{sql}")
 

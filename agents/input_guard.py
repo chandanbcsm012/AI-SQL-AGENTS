@@ -6,8 +6,9 @@ other step.
 """
 import uuid
 
-from middleware.guardrails import check_input
+from middleware.guardrails import check_input, load_policy
 from middleware.pii import mask_text
+from middleware.rate_limit import check_rate_limit
 from middleware.tracing import traced_node
 from resilience import resilient_node
 
@@ -15,6 +16,18 @@ from resilience import resilient_node
 def input_guard(state: dict) -> dict:
     state.setdefault("trace_id", str(uuid.uuid4()))
     query = state["user_query_raw"]
+
+    policy = load_policy()
+    limit = policy.get("input", {}).get("rate_limit_per_minute", 30)
+    username = state.get("username") or "anonymous"
+    allowed, count = check_rate_limit(f"query:{username}", limit)
+    if not allowed:
+        state["status"] = "failed"
+        state["final_answer"] = (
+            f"You've hit the rate limit ({limit} requests/minute). Please try again shortly."
+        )
+        state["error_detail"] = {"node": "input_guard", "error": f"rate limit exceeded ({count}/{limit})"}
+        return state
 
     ok, reason = check_input(query)
     if not ok:

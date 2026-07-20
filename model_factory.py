@@ -59,6 +59,12 @@ def _build_chat_client(provider: Provider, model_name: str, temperature: float):
     raise ValueError(f"Unknown provider: {provider}")
 
 
+def resolve_model_name(role: ModelRole, provider: "Provider | None" = None) -> str:
+    """The model name that get_chat_model(role, provider) would build --
+    useful for cache keys / logging without instantiating a client."""
+    return MODEL_MAP[provider or DEFAULT_PROVIDER][role]
+
+
 def get_chat_model(
     role: ModelRole = ModelRole.GENERAL,
     provider: "Provider | None" = None,

@@ -1,11 +1,16 @@
 """Schema Retriever Agent (spec section 3.2).
 
 Introspects the live SQLite schema via sqlite_master / PRAGMA table_info and
-ranks tables by lexical overlap with the question. This is the retrieval
-strategy for the demo; swap `_rank_tables` for a Pinecone similarity search
-over table/column descriptions (see model_factory.get_embedding_model) once
-a vector store is provisioned -- the spec calls the vector DB optional.
+ranks tables by relevance to the question. Two ranking backends:
+
+- "lexical" (default): keyword overlap, zero dependencies, fine for this
+  demo's handful of tables.
+- "semantic" (SCHEMA_RETRIEVAL_BACKEND=semantic): embedding similarity via
+  Qdrant (see semantic_schema.py), for schemas large enough that keyword
+  overlap stops being reliable. Falls back to lexical automatically if
+  Qdrant/the embedding model isn't reachable.
 """
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -15,6 +20,7 @@ from middleware.tracing import traced_node
 from resilience import resilient_node
 
 DB_PATH = Path(__file__).parent.parent / "db" / "app.db"
+SCHEMA_RETRIEVAL_BACKEND = os.getenv("SCHEMA_RETRIEVAL_BACKEND", "lexical")
 
 
 def _introspect_schema(db_path: Path | None = None, allowed_tables: set[str] | None = None) -> list[dict]:
@@ -63,7 +69,14 @@ def schema_retriever(state: dict) -> dict:
     )
     schema = _introspect_schema(allowed_tables=allowed)
     question = state.get("user_query_masked") or state.get("user_query_raw", "")
-    state["schema_context"] = _rank_tables(question, schema)
+
+    ranked = None
+    if SCHEMA_RETRIEVAL_BACKEND == "semantic":
+        from semantic_schema import semantic_rank_tables
+
+        ranked = semantic_rank_tables(question, schema)
+
+    state["schema_context"] = ranked if ranked is not None else _rank_tables(question, schema)
     return state
 
 

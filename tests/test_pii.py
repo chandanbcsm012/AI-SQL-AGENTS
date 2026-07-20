@@ -25,3 +25,18 @@ def test_mask_is_scoped_per_trace_id():
 def test_contains_pii_detects_email():
     assert contains_pii("email me at someone@example.com")
     assert not contains_pii("no personal data here")
+
+
+def test_presidio_masks_person_and_location_names():
+    trace_id = "trace-ner"
+    text = "This is Asha Rao from Bengaluru."
+
+    masked = mask_text(text, trace_id)
+
+    assert "Asha Rao" not in masked
+    assert "Bengaluru" not in masked
+    assert "PII_NAME_1" in masked
+    assert "PII_LOCATION_1" in masked
+    assert unmask_text(masked, trace_id) == text
+    assert not contains_pii(masked)
+    assert contains_pii(text)

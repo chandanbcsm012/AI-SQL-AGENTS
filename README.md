@@ -8,10 +8,14 @@
 ![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-1C3C3C)
 ![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B?logo=streamlit&logoColor=white)
 ![SQLite](https://img.shields.io/badge/database-SQLite-003B57?logo=sqlite&logoColor=white)
+![Postgres](https://img.shields.io/badge/checkpointer%20%2F%20history-PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![Qdrant](https://img.shields.io/badge/semantic%20retrieval-Qdrant-DC244C)
+![Valkey](https://img.shields.io/badge/cache%20%2F%20rate--limit-Valkey-1E67B0)
+![Docker](https://img.shields.io/badge/containerized-Docker-2496ED?logo=docker&logoColor=white)
 ![uv](https://img.shields.io/badge/package%20manager-uv-DE5FE9)
 ![pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)
 
-[Demo](#-demo) • [Features](#-features) • [Tech Stack](#-tech-stack) • [Architecture](#-architecture) • [Setup](#-setup--running) • [Auth](#-authentication--authorization)
+[Demo](#-demo) • [Features](#-features) • [Tech Stack](#-tech-stack) • [Architecture](#-architecture) • [Setup](#-setup--running) • [Auth](#-authentication--authorization) • [Roadmap](#️-roadmap--improvement-plan)
 
 </div>
 
@@ -29,14 +33,14 @@ guardrails, per-user authorization, and structured tracing wrapping every hop.
 
 <div align="center">
 
-<video src="demo.mov" controls width="720">
+<video src="demo.mp4" controls width="720">
   Your browser/viewer doesn't support inline video playback — download it
-  directly: <a href="demo.mov">demo.mov</a>.
+  directly: <a href="demo.mp4">demo.mp4</a>.
 </video>
 
 *If the player above doesn't render in your viewer — GitHub plays it inline
 once the repo is pushed there, but many local Markdown previewers don't —
-open [demo.mov](demo.mov) directly.*
+open [demo.mp4](demo.mp4) directly.*
 
 </div>
 
@@ -49,8 +53,8 @@ open [demo.mov](demo.mov) directly.*
 <td width="33%" valign="top">
 
 ### 🧠 Agentic pipeline
-NL → SQL → validate → regenerate once → human review, orchestrated as an
-explicit [LangGraph](#-architecture) state machine, not an implicit agent loop.
+NL → SQL → validate → regenerate (capped) → human review, orchestrated as
+an explicit [LangGraph](#-architecture) state machine, not an implicit agent loop.
 
 </td>
 <td width="33%" valign="top">
@@ -72,8 +76,8 @@ rehydrated for the requesting user, never in logs.
 <td width="33%" valign="top">
 
 ### 🙋 Human-in-the-loop
-Two failed SQL attempts pause the graph for a real reviewer — approve,
-edit, or reject — via CLI or an inline Streamlit widget.
+Once the regeneration cap is exhausted, the graph pauses for a real
+reviewer — approve, edit, or reject — via CLI or an inline Streamlit widget.
 
 </td>
 <td width="33%" valign="top">
@@ -103,18 +107,24 @@ Every node emits an OTel span + a structured JSON log line sharing one
 | LLM (dev) | **Ollama**, local (`qwen2.5:7b` for SQL gen, `llama3.2:latest` for general, `nomic-embed-text:latest` for embeddings — overridable via env) |
 | LLM (prod) | **Google Gemini** (`gemini-2.5-flash` generation, `gemini-embedding-001` embeddings) via `langchain-google-genai` |
 | Model selection | **Model Factory** ([model_factory.py](model_factory.py)) — the only module allowed to instantiate an LLM/embedding client; provider chosen by `MODEL_PROVIDER` env var, per-request override, or automatic fallback |
-| Relational DB | SQLite, file-based (`db/app.db`) |
+| Relational DB (business data) | SQLite, file-based (`db/app.db`) — the data the NL agent actually queries |
+| Durable app state | **PostgreSQL** ([infra/docker-compose.yml](infra/docker-compose.yml)) — LangGraph checkpointer (`graph.py`) and `activity_log`/`user_preferences` ([history.py](history.py)); falls back to in-memory if unreachable |
+| Cache & rate limiting | **Valkey** (OSS Redis fork) — LLM response cache ([middleware/cache.py](middleware/cache.py), measured 100x+ speedup on repeats) and per-user rate limiting ([middleware/rate_limit.py](middleware/rate_limit.py)); fails open if unreachable |
+| Semantic retrieval | **Qdrant** + Ollama embeddings ([semantic_schema.py](semantic_schema.py)) — opt-in (`SCHEMA_RETRIEVAL_BACKEND=semantic`) upgrade over lexical table ranking, falls back automatically |
 | SQL parsing | `sqlglot` (statement-type checks, table/column extraction, `LIMIT` injection) |
 | Guardrails | Custom validators in [middleware/guardrails.py](middleware/guardrails.py), policy-driven via [config/guardrail_policy.yaml](config/guardrail_policy.yaml) |
-| PII masking | Regex-based reversible tokenization in [middleware/pii.py](middleware/pii.py), policy-driven via [config/pii_policy.yaml](config/pii_policy.yaml) |
-| Tracing | OpenTelemetry spans → `logs/spans.jsonl`; structured JSON log lines → `logs/app.log` (one line per agent step, filterable by `trace_id`) |
+| PII masking | Regex (structured PII) + **Presidio/spaCy NER** (names, locations) in [middleware/pii.py](middleware/pii.py), policy-driven via [config/pii_policy.yaml](config/pii_policy.yaml) |
+| Structured outputs | `PydanticOutputParser` in [agents/sql_generator.py](agents/sql_generator.py) — regex extraction is now only a fallback |
+| Tracing | OpenTelemetry spans → **Grafana Tempo** (`OTEL_EXPORTER_OTLP_ENDPOINT`) or a local file; structured JSON log lines → `logs/app.log` (one line per agent step, filterable by `trace_id`). Each `sql_generator` line/span also carries `mode` (`initial`/`regenerate`), and `sql_validator` lines carry `sql_valid`/`validator_error`. |
 | Resilience | [resilience.py](resilience.py) — per-node retry (3x exponential backoff) + provider fallback, independent of the business-level SQL retry |
-| UI | **Streamlit** app ([streamlit_app.py](streamlit_app.py)): Chat tab (live per-node status timeline + human-review widget), SQL Editor tab, Import Schema/Data tab, sidebar table browser |
+| UI | **Streamlit** app ([streamlit_app.py](streamlit_app.py)): Chat tab (live per-node status timeline, streamed-replay answers, human-review widget, conversation summary), SQL Editor tab, Import Schema/Data tab, sidebar table browser |
 | Human review | SQLite `review_queue` table ([db/schema.sql](db/schema.sql)) + CLI ([human_review/cli.py](human_review/cli.py)) + Streamlit widget |
 | Schema/data admin | [db/admin.py](db/admin.py) — read-write helpers (`execute_script`, `execute_write`, `import_csv`) for the SQL Editor / Import tabs, kept separate from the guarded agent pipeline |
-| Auth & authorization | [auth.py](auth.py) — PBKDF2-hashed logins in `app_user`, per-table ownership in `table_ownership`; a table you create is private to you (and superusers) |
+| Auth & authorization | [auth.py](auth.py) — PBKDF2-hashed logins in `app_user` with **role tiers** (`viewer`/`editor`/`admin`), per-table ownership in `table_ownership`; a table you create is private to you (and admins) |
+| Reflection | [agents/critic.py](agents/critic.py) — opt-in (`AGENTIC_CRITIC_ENABLED=true`) LLM judge that annotates answers it thinks don't address the question |
+| Containerization | [Dockerfile](Dockerfile) + [infra/docker-compose.yml](infra/docker-compose.yml) for the full OSS stack |
 | Package/env manager | **uv** |
-| Tests | `pytest`, LLM stubbed via `FakeLLM` for deterministic e2e runs |
+| Tests | `pytest` (59 tests), LLM stubbed via `FakeLLM` for deterministic e2e runs; rate-limit/cache are mocked in `tests/conftest.py` so the suite never depends on Valkey/Postgres being up, except `tests/test_semantic_schema.py`, which hits real Qdrant and skips cleanly if it's unreachable |
 
 <details>
 <summary><strong>📁 Project layout</strong> (click to expand)</summary>
@@ -124,33 +134,42 @@ SQL_AGENTS/
 ├── agents/                  # one module per graph node, invoke(state) -> state
 │   ├── input_guard.py        # PII mask + input guardrail (entry point)
 │   ├── schema_retriever.py    # SQLite introspection + lexical table ranking
-│   ├── sql_generator.py       # NL -> SQL (first attempt)
+│   ├── sql_generator.py       # NL -> SQL; also regenerates using the validator error (self-loop)
 │   ├── sql_validator.py       # sqlglot + guardrail checks against live schema
-│   ├── sql_regenerator.py      # SQL + validator error -> corrected SQL
 │   ├── human_review_agent.py   # enqueue_review + await_decision (HITL gate)
 │   ├── sql_executor.py         # read-only execution, row-limit, timeout
-│   └── response_formatter.py   # rows -> NL answer, output guardrail, rehydrate PII
+│   ├── response_formatter.py   # rows -> NL answer, output guardrail, rehydrate PII
+│   └── critic.py               # opt-in reflection node (AGENTIC_CRITIC_ENABLED)
 ├── middleware/
-│   ├── pii.py                # mask_text/unmask_text, PIIVault, contains_pii
+│   ├── pii.py                # mask_text/unmask_text, PIIVault, contains_pii (regex + Presidio NER)
 │   ├── guardrails.py           # check_input/check_sql/check_output, apply_row_limit
-│   └── tracing.py              # traced_node decorator: OTel span + structlog line
+│   ├── tracing.py              # traced_node decorator: OTel span (→ Tempo) + structlog line
+│   ├── rate_limit.py            # Valkey fixed-window per-user rate limiting
+│   └── cache.py                  # Valkey LLM response cache
 ├── human_review/
 │   ├── queue.py                # review_queue CRUD
 │   └── cli.py                  # list/show/approve/reject CLI
 ├── db/
-│   ├── schema.sql, seed_data.sql, init_db.py
+│   ├── schema.sql, seed_data.sql, init_db.py   # SQLite: business data + auth/ownership/review_queue
+│   ├── postgres_schema.sql      # Postgres: activity_log, user_preferences
 │   ├── admin.py                # read-write helpers: execute_script, execute_write, import_csv
 │   └── app.db                  # generated
 ├── config/
 │   ├── pii_policy.yaml
 │   └── guardrail_policy.yaml
-├── tests/                     # unit tests per module + 3 e2e scenarios + auth/ACL tests
-├── auth.py                      # login (PBKDF2), table ownership, visibility rules
+├── infra/                     # docker-compose.yml: Postgres, Valkey, Qdrant, MinIO, OTel/Tempo/Prometheus/Grafana/Loki
+├── docs/                      # AGENTIC_AI_ROADMAP.md, IMPLEMENTATION_PLAN.md
+├── tests/                     # unit tests per module + e2e scenarios + auth/ACL/RBAC tests
+├── auth.py                      # login (PBKDF2), role tiers, table ownership, visibility rules
+├── history.py                    # Postgres-backed activity log + user preferences
+├── memory.py                     # conversation summary memory helper
+├── semantic_schema.py            # Qdrant-backed semantic table retrieval (opt-in)
 ├── model_factory.py            # provider-agnostic LLM/embedding client factory
 ├── resilience.py                # technical retry/self-recovery decorator
 ├── state.py                     # shared AgentState TypedDict
 ├── graph.py                     # LangGraph wiring, run_query(), resume_review()
 ├── trace_viewer.py               # filters logs/app.log by trace_id
+├── Dockerfile                     # containerizes the Streamlit app
 └── streamlit_app.py              # Chat / SQL Editor / Import tabs + sidebar table browser
 ```
 
@@ -162,14 +181,14 @@ SQL_AGENTS/
 
 | # | Agent | File | Job |
 |---|---|---|---|
-| — | Orchestrator | [graph.py](graph.py) | Owns the `StateGraph`, routing functions, and the checkpointer; enforces max 1 regeneration before escalation |
+| — | Orchestrator | [graph.py](graph.py) | Owns the `StateGraph`, routing functions, and the checkpointer; enforces the regeneration cap before escalation |
 | 1 | Schema Retriever | [agents/schema_retriever.py](agents/schema_retriever.py) | `PRAGMA table_info` / `sqlite_master` introspection, lexical relevance ranking of tables |
-| 2 | NL→SQL Generator | [agents/sql_generator.py](agents/sql_generator.py) | First-pass SQL from the masked question + schema context |
+| 2 | NL→SQL Generator | [agents/sql_generator.py](agents/sql_generator.py) | One node, two prompt modes: fresh generation on the first pass, then self-loops as a regenerator — feeding the failed SQL + validator error back in — until valid or the cap escalates to human review |
 | 3 | SQL Validator | [agents/sql_validator.py](agents/sql_validator.py) | Syntax (sqlglot), table/column existence, guardrail compliance, auto row-limit |
-| 4 | SQL Regenerator | [agents/sql_regenerator.py](agents/sql_regenerator.py) | Re-prompts with the failed SQL + validator error (one shot only) |
-| 5 | Human Review | [agents/human_review_agent.py](agents/human_review_agent.py) | `enqueue_review` writes to `review_queue`; `await_decision` re-checks it after the graph resumes |
-| 6 | SQL Executor | [agents/sql_executor.py](agents/sql_executor.py) | Read-only SQLite connection, progress-handler query timeout |
-| 7 | Response Formatter | [agents/response_formatter.py](agents/response_formatter.py) | Rows → NL answer; masks rows before the LLM call, rehydrates PII after the output guardrail passes |
+| 4 | Human Review | [agents/human_review_agent.py](agents/human_review_agent.py) | `enqueue_review` writes to `review_queue`; `await_decision` re-checks it after the graph resumes |
+| 5 | SQL Executor | [agents/sql_executor.py](agents/sql_executor.py) | Read-only SQLite connection, progress-handler query timeout |
+| 6 | Response Formatter | [agents/response_formatter.py](agents/response_formatter.py) | Rows → NL answer; masks rows before the LLM call, rehydrates PII after the output guardrail passes |
+| 7 | Critic *(opt-in)* | [agents/critic.py](agents/critic.py) | `AGENTIC_CRITIC_ENABLED=true`: judges whether the answer addresses the question; annotates `state.critic_feedback` rather than looping — see [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §5 for why it doesn't auto-correct |
 
 **Cross-cutting**, wrapping every node above (not graph nodes themselves):
 
@@ -202,43 +221,45 @@ SQL_AGENTS/
 │                                                                             │
 │   every node below is wrapped:  resilient_node( traced_node( fn ) )        │
 │                                                                             │
-│   [input_guard] → [schema_retriever] → [sql_generator] → [sql_validator]   │
-│         │                                                    │  │          │
-│      failed                                             valid│  │invalid   │
-│         │                                                    │  │          │
-│         ▼                                                    ▼  ▼          │
-│        END                              [sql_executor]  [sql_regenerator]  │
-│                                                │                │          │
-│                                                │                ▼          │
-│                                                │          [sql_validator]  │
-│                                                │           (loop, once)    │
-│                                                │                │invalid   │
-│                                                │                ▼          │
-│                                                │        [enqueue_review]   │
-│                                                │                │          │
-│                                                │       ┄┄┄ interrupt ┄┄┄   │
-│                                                │                │          │
-│                                                │         [await_decision]  │
-│                                                │          │approved │rejected/pending
-│                                                │◄─────────┘         │      │
-│                                                │                    ▼      │
-│                                                │                   END     │
+│                     ┌──regenerate (self-loop, capped)──┐                  │
+│                     ▼                                   │                  │
+│   [input_guard] → [schema_retriever] → [sql_generator] ─┘                  │
+│         │                                    │                             │
+│      failed                                  ▼                             │
+│         │                             [sql_validator]                      │
+│         ▼                              valid │  │ invalid, cap exhausted   │
+│        END                                    │  │                        │
+│                                                │  ▼                        │
+│                                                │ [enqueue_review]           │
+│                                                │        │                  │
+│                                                │  ┄┄┄ interrupt ┄┄┄         │
+│                                                │        │                  │
+│                                                │ [await_decision]           │
+│                                                │  │approved │rejected/pending
+│                                                │◄─┘         │              │
+│                                                │             ▼             │
+│                                                │            END            │
 │                                                ▼                           │
-│                                    [response_formatter] ──► END            │
+│                        [sql_executor] → [response_formatter] → [critic]*  │
+│                                                                    │        │
+│                                                                    ▼        │
+│                                                                   END       │
 └───────────────────────────────────────────────────────────────────────────┘
-         │                                    │                     │
-         ▼                                    ▼                     ▼
-┌──────────────────┐              ┌──────────────────────┐  ┌──────────────────┐
-│  model_factory.py │              │      db/app.db        │  │ human_review/     │
-│  Ollama ↔ Gemini  │              │  (customer, product,  │  │ queue.py + cli.py  │
-│  (env / override / │              │   orders, order_item, │  │ review_queue table │
-│   auto-fallback)   │              │   review_queue)        │  │                    │
-└──────────────────┘              └──────────────────────┘  └──────────────────┘
-         ▲
+         │                    │                    │                  │
+         ▼                    ▼                    ▼                  ▼
+┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+│  model_factory.py  │ │    db/app.db       │ │ human_review/      │ │ Postgres + Valkey +│
+│  Ollama ↔ Gemini   │ │ (customer, product,│ │ queue.py + cli.py   │ │ Qdrant (infra/)     │
+│  (env / override /  │ │  orders, order_item)│ │ review_queue table  │ │ checkpointer, cache,│
+│   auto-fallback)    │ └──────────────────┘ └──────────────────┘ │ rate-limit, semantic│
+└──────────────────┘                                              │ retrieval, tracing  │
+         ▲                                                          └──────────────────┘
          │
 ┌──────────────────┐
 │  resilience.py    │  3x backoff → fallback provider → structured error
 └──────────────────┘
+
+* critic is opt-in (AGENTIC_CRITIC_ENABLED=true); a no-op passthrough otherwise.
 ```
 
 </details>
@@ -261,20 +282,22 @@ User query (raw)
                ▼
 ┌─────────────────────────────┐
 │ sql_generator                 │  LLM(schema_context, user_query_masked) → SQL
+│ mode="initial" on first pass, │  (see state._generation_mode)
+│ mode="regenerate" on retry    │  regenerate prompt = failed SQL + validator error
 └──────────────┬───────────────┘  state.final_sql
                ▼
 ┌─────────────────────────────┐
 │ sql_validator                  │  sqlglot parse + check_sql() against live schema
 └──────────────┬───────────────┘  appends {attempt, sql, valid, error} to sql_attempts
-       valid   │   invalid
-   ┌───────────┘   └────────────────────┐
-   ▼                                     ▼
-┌─────────────────┐            attempt 1: sql_regenerator (loop back to validator)
-│ sql_executor      │            attempt 2: enqueue_review → [interrupt] → await_decision
-│ read-only, LIMIT, │                                              │approved   │other
-│ query timeout      │                                              ▼           ▼
-└─────────┬─────────┘                                       final_sql=decision  END
-          ▼                                                 → sql_executor      (escalated/failed)
+       valid   │   invalid, attempts <= cap        invalid, cap exhausted
+   ┌───────────┘   └──────────────┐         └──────────────────┐
+   ▼                               ▼                             ▼
+┌─────────────────┐        back to sql_generator          enqueue_review → [interrupt] → await_decision
+│ sql_executor      │       (mode="regenerate")                                  │approved   │other
+│ read-only, LIMIT, │                                                           ▼           ▼
+│ query timeout      │                                                  final_sql=decision  END
+└─────────┬─────────┘                                                   → sql_executor      (escalated/failed)
+          ▼
 ┌─────────────────────────────┐
 │ response_formatter             │  mask rows → LLM → check_output() → rehydrate PII
 └──────────────┬───────────────┘  state.final_answer
@@ -293,15 +316,15 @@ Two independent retry concepts — do not conflate them:
 
 | | Trigger | Behavior |
 |---|---|---|
-| **Business retry** (semantic) | SQL is *invalid* | Regenerate once → if still invalid, escalate to human review. Hard-coded circuit breaker (`config/guardrail_policy.yaml: escalation.max_regeneration_attempts`), not model-decided. See `route_after_validation` in [graph.py](graph.py). |
+| **Business retry** (semantic) | SQL is *invalid* | `sql_generator` self-loops back through `sql_validator` up to `config/guardrail_policy.yaml: escalation.max_regeneration_attempts` times → if still invalid, escalate to human review. Hard-coded circuit breaker, not model-decided. See `route_after_validation` in [graph.py](graph.py). |
 | **Technical retry** (exceptions) | A node *throws* (timeout, connection error, malformed response, 5xx/429) | 3 attempts with exponential backoff → one self-recovery attempt on the fallback provider → structured `status: "error"` instead of a crash. See [resilience.py](resilience.py), applied to every node regardless of what it does. |
 
 ### Human-in-the-Loop Flow
 
-1. Two failed SQL attempts → `enqueue_review` writes a row to `review_queue`
-   (masked query, both attempts + errors, schema context) and the graph is
-   compiled with `interrupt_before=["await_decision"]`, so it pauses right
-   there.
+1. Once the regeneration cap is exhausted, `enqueue_review` writes a row to
+   `review_queue` (masked query, every failed attempt + error as JSON,
+   schema context) and the graph is compiled with
+   `interrupt_before=["await_decision"]`, so it pauses right there.
 2. A reviewer inspects the queue via:
    - **CLI**: `uv run python -m human_review.cli list|show|approve|reject`
    - **Streamlit**: the inline approve/edit/reject widget on an escalated chat turn
@@ -352,13 +375,18 @@ user and is scoped by their visibility.
 
 **Model** ([auth.py](auth.py), tables in [db/schema.sql](db/schema.sql)):
 
-- `app_user` — username + PBKDF2-hashed password + `is_superuser` flag.
+- `app_user` — username + PBKDF2-hashed password + a `role`: `viewer`
+  (read-only — guarded SELECT-only queries, no SQL Editor unguarded mode,
+  no imports), `editor` (owns tables they create), or `admin` (bypasses
+  ownership entirely, sees everything). `is_superuser` is kept alongside
+  `role` (`role == "admin"`) so code written before role tiers existed
+  still works unchanged.
 - `table_ownership` — one row per table *created after seeding*, mapping
   `table_name -> owner`. A table with no row here is **public** (every
   seeded table — `customer`, `product`, `orders`, `order_item`,
   `review_queue` — is public). A table with a row here is **private**:
   visible only to its owner.
-- A **superuser** (`is_superuser=1`) bypasses ownership entirely and sees
+- An **admin** (`is_superuser=1`) bypasses ownership entirely and sees
   every table, public or private — `auth.visible_tables()` returns `None`
   for them, meaning "no restriction."
 
@@ -368,21 +396,24 @@ user and is scoped by their visibility.
 |---|---|
 | `agents/schema_retriever.py` | `_introspect_schema(allowed_tables=...)` filters live schema introspection to `auth.visible_tables(username, is_superuser)` before ranking, so the NL agent never even sees another user's private table as candidate context. |
 | `agents/sql_validator.py` | Restricts its table/column allow-list to the same visible set, so a user can't get *valid* SQL against a private table they don't own even by guessing its name directly. |
-| `db/admin.py` | `_check_access()` extracts referenced tables (via `sqlglot`) from any SQL Editor / import statement and rejects it with `AccessDeniedError` unless every table is visible to the caller. `CREATE TABLE` is exempt (a brand-new name always succeeds), and ownership is recorded immediately afterward via `auth.record_table_owner()`. |
+| `db/admin.py` | `auth.can_write(role)` rejects any write/import from a `viewer` outright; `_check_access()` extracts referenced tables (via `sqlglot`) from any SQL Editor / import statement and rejects it with `AccessDeniedError` unless every table is visible to the caller. `CREATE TABLE` is exempt (a brand-new name always succeeds), and ownership is recorded immediately afterward via `auth.record_table_owner()`. |
 | `graph.run_query(...)` | Threads `username`/`is_superuser` into `AgentState` so every node downstream sees the same user; omitting `username` (e.g. direct CLI/test use) means **unrestricted**, matching the pre-auth behavior. |
 
 **Demo accounts** (seeded by `db/init_db.py` via `auth.ensure_default_users`):
 
 | Username | Password | Role |
 |---|---|---|
-| `admin` | `admin123` | 👑 superuser — sees every table |
-| `alice` | `alice123` | regular user |
-| `bob` | `bob123` | regular user |
+| `admin` | `admin123` | 👑 admin — sees/can do everything |
+| `alice` | `alice123` | ✏️ editor — owns tables they create |
+| `bob` | `bob123` | ✏️ editor — owns tables they create |
+| `carol` | `carol123` | 👁️ viewer — read-only, guarded queries only |
 
 > ⚠️ Change these before using this anywhere but a local demo.
 
 Log in as `alice`, create a table via the Import tab, and it's invisible to
-`bob` but visible to `admin` — that's the whole feature, end to end.
+`bob` but visible to `admin` — that's the ownership feature, end to end. Log
+in as `carol` and the Import tab and SQL Editor's unguarded mode are
+disabled outright — that's the role-tier feature.
 
 ---
 
@@ -392,29 +423,56 @@ Log in as `alice`, create a table via the Import tab, and it's invisible to
 # 1. Install dependencies (uv reads pyproject.toml)
 uv sync
 
-# 2. Seed the demo SQLite database (also seeds admin/alice/bob accounts, see Auth section)
+# 2. Bring up the OSS infra stack (Postgres, Valkey, Qdrant, MinIO, OTel/Tempo/
+#    Prometheus/Grafana/Loki) -- everything below degrades gracefully without
+#    it (in-memory checkpointer, no rate limit/cache, lexical schema ranking),
+#    but this is what actually exercises Phases 1-4 of the improvement plan.
+cd infra && docker compose up -d && cd ..
+
+# 3. Seed the demo SQLite database (also seeds admin/alice/bob/carol accounts,
+#    one per role -- see Auth section)
 uv run python db/init_db.py
 
-# 3. (dev) make sure Ollama is running with the configured models
+# 4. (dev) make sure Ollama is running with the configured models
 ollama pull qwen2.5:7b llama3.2:latest nomic-embed-text:latest
 # or override via env: OLLAMA_SQL_MODEL, OLLAMA_GENERAL_MODEL, OLLAMA_EMBED_MODEL
 
-# 4. (prod) set provider + Gemini credentials
+# 5. (prod) set provider + Gemini credentials
 export MODEL_PROVIDER=gemini
 export GOOGLE_API_KEY=...
 
-# 5. Run the graph directly
+# 6. Run the graph directly
 uv run python -c "from graph import run_query; print(run_query('How many orders has Asha Rao placed?'))"
 
-# 6. Run the Streamlit UI, then log in (see Auth section for demo accounts)
+# 7. Run the Streamlit UI, then log in (see Auth section for demo accounts)
 uv run streamlit run streamlit_app.py
 
-# 7. Run tests
+# 8. Run tests
 uv run pytest tests/ -v
+
+# 9. (optional) run the containerized app instead of step 7 -- see Dockerfile
+docker build -t sql-agents .
+docker run -p 8501:8501 --network infra_default \
+  -e DATABASE_URL=postgresql://sqlagents:sqlagents@postgres:5432/sqlagents \
+  -e REDIS_URL=redis://valkey:6379/0 -e QDRANT_URL=http://qdrant:6333 \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+  sql-agents
 ```
 
 Logs land in `logs/app.log` (structured JSON, one line per agent step,
-filterable by `trace_id`) and `logs/spans.jsonl` (OTel spans).
+filterable by `trace_id`) and either `logs/spans.jsonl` or Grafana Tempo
+(OTel spans, see below).
+
+**Opt-in feature flags** (all fail open / fall back safely if unset or the
+backing infra is unreachable):
+
+| Env var | Effect |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` | Export real spans to the OTel Collector → Grafana Tempo instead of `logs/spans.jsonl` |
+| `SCHEMA_RETRIEVAL_BACKEND=semantic` | Use Qdrant embedding similarity instead of lexical keyword overlap for schema retrieval |
+| `AGENTIC_CRITIC_ENABLED=true` | Turn on the Critic reflection node |
+| `CHECKPOINTER_BACKEND=memory` | Force `MemorySaver` even if Postgres is reachable (default: Postgres if reachable, else memory) |
+| `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL` | Point at non-default hosts for Postgres/Valkey/Qdrant |
 
 ---
 
@@ -422,5 +480,27 @@ filterable by `trace_id`) and `logs/spans.jsonl` (OTel spans).
 
 | File | Controls |
 |---|---|
-| [config/pii_policy.yaml](config/pii_policy.yaml) | Which entity types to mask/hash/drop, token prefixes, whether to rehydrate the final answer. |
-| [config/guardrail_policy.yaml](config/guardrail_policy.yaml) | Prompt-injection phrases, SQL statement/keyword allow/deny-lists, row-limit and query-timeout caps, output leak checks, max regeneration attempts. |
+| [config/pii_policy.yaml](config/pii_policy.yaml) | Which entity types to mask/hash/drop (including Presidio NER `PERSON`/`LOCATION`), token prefixes, whether to rehydrate the final answer. |
+| [config/guardrail_policy.yaml](config/guardrail_policy.yaml) | Prompt-injection phrases, rate limit, SQL statement/keyword allow/deny-lists, row-limit and query-timeout caps, output leak checks, max regeneration attempts. |
+
+---
+
+## 🗺️ Roadmap & Improvement Plan
+
+**Phases 1–4 of the improvement plan are implemented and verified against
+real running infra** (not just mocks) — OTel spans confirmed in Grafana
+Tempo, a 132x cache speedup measured, a paused graph run read back from a
+completely separate process via the Postgres checkpointer, semantic
+retrieval confirmed against real Qdrant, RBAC confirmed rejecting a viewer's
+write. Phase 5 stops at containerization (Dockerfile built and run
+end-to-end against the full stack). See
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §5 for exactly
+what's deferred and why (Langfuse/GlitchTip/Keycloak/PostHog need
+interactive first-run setup; the Planner + parallel sub-query execution was
+judged too high-risk to half-implement; async/Celery/k3s have no real load
+here to test against).
+
+- [docs/AGENTIC_AI_ROADMAP.md](docs/AGENTIC_AI_ROADMAP.md) — the original architecture analysis and 5-phase roadmap.
+- [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) — the executable, OSS-only version, now annotated with what's actually built.
+- [infra/docker-compose.yml](infra/docker-compose.yml) — the core OSS infra stack (Postgres, Valkey, Qdrant, MinIO, OTel Collector, Prometheus, Grafana, Tempo, Loki), running via `cd infra && docker compose up -d`.
+- [Dockerfile](Dockerfile) — containerizes the app itself; verified running end-to-end against the compose stack.

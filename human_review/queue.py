@@ -24,27 +24,18 @@ def enqueue(
     schema_context: list[dict],
     db_path: Path | None = None,
 ) -> int:
-    a1 = sql_attempts[0] if len(sql_attempts) > 0 else {}
-    a2 = sql_attempts[1] if len(sql_attempts) > 1 else {}
-
     conn = _connect(db_path)
     try:
         cur = conn.execute(
             """
             INSERT INTO review_queue (
-                trace_id, user_query_masked,
-                sql_attempt_1, sql_error_1,
-                sql_attempt_2, sql_error_2,
-                schema_context, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                trace_id, user_query_masked, sql_attempts, schema_context, status, created_at
+            ) VALUES (?, ?, ?, ?, 'pending', ?)
             """,
             (
                 trace_id,
                 user_query_masked,
-                a1.get("sql"),
-                a1.get("error"),
-                a2.get("sql"),
-                a2.get("error"),
+                json.dumps(sql_attempts),
                 json.dumps(schema_context),
                 datetime.now(timezone.utc).isoformat(),
             ),
@@ -53,6 +44,19 @@ def enqueue(
         return cur.lastrowid
     finally:
         conn.close()
+
+
+def get_sql_attempts(row: sqlite3.Row) -> list[dict]:
+    """Parses the JSON sql_attempts column back into a list of
+    {attempt, sql, valid, error} dicts, in order."""
+    return json.loads(row["sql_attempts"]) if row["sql_attempts"] else []
+
+
+def latest_failed_sql(row: sqlite3.Row) -> str:
+    """The most recent (and most actionable) failed SQL attempt, used as
+    the reviewer's default starting point."""
+    attempts = get_sql_attempts(row)
+    return attempts[-1]["sql"] if attempts else ""
 
 
 def list_pending(db_path: Path | None = None) -> list[sqlite3.Row]:

@@ -94,3 +94,43 @@ def test_import_csv_into_public_seed_table_allowed_for_anyone(temp_db):
         io.BytesIO(csv_bytes), "customer", username="alice", is_superuser=False, db_path=temp_db
     )
     assert n == 1
+
+
+def test_viewer_role_cannot_execute_write(temp_db):
+    with pytest.raises(admin.AccessDeniedError):
+        admin.execute_write("SELECT * FROM customer", username="carol", role="viewer", db_path=temp_db)
+
+
+def test_viewer_role_cannot_execute_script(temp_db):
+    with pytest.raises(admin.AccessDeniedError):
+        admin.execute_script(
+            "CREATE TABLE carol_notes (id INTEGER PRIMARY KEY);",
+            username="carol",
+            role="viewer",
+            db_path=temp_db,
+        )
+
+
+def test_viewer_role_cannot_import_csv(temp_db):
+    csv_bytes = b"id,note\n1,hello\n"
+    with pytest.raises(admin.AccessDeniedError):
+        admin.import_csv(
+            io.BytesIO(csv_bytes), "carol_new_table", username="carol", role="viewer", db_path=temp_db
+        )
+
+
+def test_editor_and_admin_roles_can_write(temp_db):
+    admin.execute_write(
+        "CREATE TABLE dave_notes (id INTEGER PRIMARY KEY)",
+        username="dave",
+        role="editor",
+        db_path=temp_db,
+    )
+    admin.execute_write(
+        "CREATE TABLE admin_notes (id INTEGER PRIMARY KEY)",
+        username="admin",
+        is_superuser=True,
+        role="admin",
+        db_path=temp_db,
+    )
+    assert auth.get_table_owner("dave_notes", db_path=temp_db) == "dave"

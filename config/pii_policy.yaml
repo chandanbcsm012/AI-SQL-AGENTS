@@ -26,6 +26,9 @@ entities:
   PERSON:
     action: mask
     token_prefix: PII_NAME
+  LOCATION:
+    action: mask
+    token_prefix: PII_LOCATION
 
 # Never rehydrate PII into logs/traces — only into the final response shown
 # to the original requesting user, and only if this is true.

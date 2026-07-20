@@ -16,7 +16,34 @@ def test_enqueue_and_list_pending(temp_db):
     pending = queue.list_pending(db_path=temp_db)
     assert len(pending) == 1
     assert pending[0]["review_id"] == review_id
-    assert pending[0]["sql_attempt_2"] == "SELECT 1;DROP TABLE x"
+    attempts = queue.get_sql_attempts(pending[0])
+    assert len(attempts) == 2
+    assert attempts[1]["sql"] == "SELECT 1;DROP TABLE x"
+    assert queue.latest_failed_sql(pending[0]) == "SELECT 1;DROP TABLE x"
+
+
+def test_enqueue_preserves_more_than_two_attempts(temp_db):
+    # config/guardrail_policy.yaml currently allows 2 regenerations (3 total
+    # attempts) before escalation -- sql_attempts must be stored as a full
+    # list, not two fixed columns, or the last (most relevant) attempt gets
+    # silently dropped.
+    attempts = [
+        {"attempt": 1, "sql": "SELECT * FROM a", "valid": False, "error": "e1"},
+        {"attempt": 2, "sql": "SELECT * FROM b", "valid": False, "error": "e2"},
+        {"attempt": 3, "sql": "SELECT * FROM c", "valid": False, "error": "e3"},
+    ]
+    review_id = queue.enqueue(
+        trace_id="trace-many",
+        user_query_masked="q",
+        sql_attempts=attempts,
+        schema_context=[],
+        db_path=temp_db,
+    )
+
+    row = queue.get(review_id, db_path=temp_db)
+    stored = queue.get_sql_attempts(row)
+    assert stored == attempts
+    assert queue.latest_failed_sql(row) == "SELECT * FROM c"
 
 
 def test_decide_approve_updates_status(temp_db):

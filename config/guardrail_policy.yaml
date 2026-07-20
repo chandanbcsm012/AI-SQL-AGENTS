@@ -2,6 +2,7 @@
 
 input:
   max_query_length: 1000
+  rate_limit_per_minute: 30
   prompt_injection_phrases:
     - "ignore previous instructions"
     - "ignore all previous instructions"
@@ -38,4 +39,4 @@ output:
   block_db_file_paths: true
 
 escalation:
-  max_regeneration_attempts: 1
+  max_regeneration_attempts: 2

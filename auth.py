@@ -35,21 +35,27 @@ def _hash_password(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS).hex()
 
 
+ROLES = ("viewer", "editor", "admin")
+
+
 def create_user(
-    username: str, password: str, is_superuser: bool = False, db_path: Path | None = None
+    username: str, password: str, role: str = "editor", db_path: Path | None = None
 ) -> None:
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {ROLES}, got {role!r}")
     salt = os.urandom(16)
     password_hash = _hash_password(password, salt)
     conn = _connect(db_path)
     try:
         conn.execute(
-            "INSERT INTO app_user (username, password_hash, salt, is_superuser, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO app_user (username, password_hash, salt, role, is_superuser, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 username,
                 password_hash,
                 salt.hex(),
-                int(is_superuser),
+                role,
+                int(role == "admin"),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -59,7 +65,9 @@ def create_user(
 
 
 def authenticate(username: str, password: str, db_path: Path | None = None) -> dict | None:
-    """Returns {"username", "is_superuser"} on success, else None."""
+    """Returns {"username", "role", "is_superuser"} on success, else None.
+    is_superuser is kept alongside role (role == "admin") for code that
+    predates the role tiers and only checks the boolean."""
     conn = _connect(db_path)
     try:
         row = conn.execute(
@@ -69,24 +77,29 @@ def authenticate(username: str, password: str, db_path: Path | None = None) -> d
             return None
         if _hash_password(password, bytes.fromhex(row["salt"])) != row["password_hash"]:
             return None
-        return {"username": row["username"], "is_superuser": bool(row["is_superuser"])}
+        return {
+            "username": row["username"],
+            "role": row["role"],
+            "is_superuser": bool(row["is_superuser"]),
+        }
     finally:
         conn.close()
 
 
 def ensure_default_users(db_path: Path | None = None) -> None:
-    """Seeds a default superuser + demo user the first time app_user is
-    empty. Change these passwords before using this anywhere but a local
-    demo."""
+    """Seeds default demo accounts, one per role, the first time app_user
+    is empty. Change these passwords before using this anywhere but a
+    local demo."""
     conn = _connect(db_path)
     try:
         count = conn.execute("SELECT COUNT(*) AS n FROM app_user").fetchone()["n"]
     finally:
         conn.close()
     if count == 0:
-        create_user("admin", "admin123", is_superuser=True, db_path=db_path)
-        create_user("alice", "alice123", is_superuser=False, db_path=db_path)
-        create_user("bob", "bob123", is_superuser=False, db_path=db_path)
+        create_user("admin", "admin123", role="admin", db_path=db_path)
+        create_user("alice", "alice123", role="editor", db_path=db_path)
+        create_user("bob", "bob123", role="editor", db_path=db_path)
+        create_user("carol", "carol123", role="viewer", db_path=db_path)
 
 
 def record_table_owner(table_name: str, owner: str, db_path: Path | None = None) -> None:
@@ -140,6 +153,12 @@ def visible_tables(
         return all_tables - owned_by_others - SYSTEM_TABLES
     finally:
         conn.close()
+
+
+def can_write(role: str) -> bool:
+    """Viewers are read-only everywhere: no unguarded SQL, no schema/data
+    import, regardless of table ownership. Editors and admins can."""
+    return role in ("editor", "admin")
 
 
 def can_access_table(

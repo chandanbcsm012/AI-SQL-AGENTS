@@ -7,10 +7,12 @@ def test_default_users_are_seeded(temp_db):
     admin = auth.authenticate("admin", "admin123", db_path=temp_db)
     alice = auth.authenticate("alice", "alice123", db_path=temp_db)
     bob = auth.authenticate("bob", "bob123", db_path=temp_db)
+    carol = auth.authenticate("carol", "carol123", db_path=temp_db)
 
-    assert admin == {"username": "admin", "is_superuser": True}
-    assert alice == {"username": "alice", "is_superuser": False}
-    assert bob == {"username": "bob", "is_superuser": False}
+    assert admin == {"username": "admin", "role": "admin", "is_superuser": True}
+    assert alice == {"username": "alice", "role": "editor", "is_superuser": False}
+    assert bob == {"username": "bob", "role": "editor", "is_superuser": False}
+    assert carol == {"username": "carol", "role": "viewer", "is_superuser": False}
 
 
 def test_wrong_password_rejected(temp_db):
@@ -22,11 +24,25 @@ def test_unknown_user_rejected(temp_db):
 
 
 def test_create_user_and_authenticate(temp_db):
-    auth.create_user("carol", "carol-secret", db_path=temp_db)
-    assert auth.authenticate("carol", "carol-secret", db_path=temp_db) == {
-        "username": "carol",
+    auth.create_user("dave", "dave-secret", db_path=temp_db)
+    assert auth.authenticate("dave", "dave-secret", db_path=temp_db) == {
+        "username": "dave",
+        "role": "editor",
         "is_superuser": False,
     }
+
+
+def test_create_user_rejects_unknown_role(temp_db):
+    import pytest
+
+    with pytest.raises(ValueError):
+        auth.create_user("eve", "eve-secret", role="root", db_path=temp_db)
+
+
+def test_can_write_by_role():
+    assert auth.can_write("editor")
+    assert auth.can_write("admin")
+    assert not auth.can_write("viewer")
 
 
 def test_seed_tables_are_public_to_everyone(temp_db):

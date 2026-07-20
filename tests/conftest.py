@@ -8,6 +8,26 @@ import pytest
 from db.init_db import init_db
 
 
+@pytest.fixture(autouse=True)
+def _no_real_rate_limit_or_cache(monkeypatch):
+    """Tests must be hermetic -- never depend on Valkey/Qdrant/Postgres
+    actually running, even though they do in this dev environment. Rate
+    limiting and LLM-response caching would otherwise silently reach out to
+    Valkey during a test run -- and worse, since several tests reuse the
+    exact same question text, a real cache would make FakeLLM's canned
+    responses go unconsumed (a hit from one test masking what the next
+    test's mock intended to return)."""
+    import agents.input_guard as input_guard
+    import agents.response_formatter as response_formatter
+    import agents.sql_generator as sql_generator
+
+    monkeypatch.setattr(input_guard, "check_rate_limit", lambda key, limit: (True, 0))
+    monkeypatch.setattr(sql_generator, "cache_get", lambda key: None)
+    monkeypatch.setattr(sql_generator, "cache_set", lambda key, value: None)
+    monkeypatch.setattr(response_formatter, "cache_get", lambda key: None)
+    monkeypatch.setattr(response_formatter, "cache_set", lambda key, value: None)
+
+
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
     """Creates an isolated app.db copy and points every module that hardcodes

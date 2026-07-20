@@ -3,9 +3,10 @@
 Split into two graph nodes so the checkpointer can interrupt at exactly
 the right point:
 
-- enqueue_review: runs automatically once regeneration has also failed.
-  Writes the masked query + both failed SQL attempts + schema context to
-  the review_queue table and marks the state as escalated.
+- enqueue_review: runs automatically once the regeneration cap
+  (config/guardrail_policy.yaml: escalation.max_regeneration_attempts) is
+  exhausted. Writes the masked query + every failed SQL attempt + schema
+  context to the review_queue table and marks the state as escalated.
 - await_decision: the node the graph is compiled with
   `interrupt_before=["await_decision"]`, so the graph pauses right after
   enqueue_review returns. Resuming (graph.invoke(None, config)) re-enters
